@@ -330,7 +330,7 @@ void setup() {
   Relay.Set_Auto_OFF_Relays(false, false, false, false, false);
 
 
-  Relay.Set_Topics("/Boat/All", "/Boat/Relay/" + WiFi_Hostname);
+  Relay.Set_Topics(MQTT_Subscribe_Topic[Topic_All], "/Boat/Relay/" + WiFi_Hostname);
 
 
   // ------------------------------ MQTT ------------------------------
