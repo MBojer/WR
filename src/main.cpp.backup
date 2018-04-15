@@ -8,6 +8,13 @@ extern "C" {
 bool ArduinoOTA_Active = false;
 
 
+// ---------------------------------------- Relay ----------------------------------------
+const int Relay_Number_Of = 5;
+const int Relay_Pin[Relay_Number_Of] {D1, D2, D5, D6, D7};
+
+bool Relay_On_State = LOW;
+
+
 // ------------------------------------------------------------ WiFi ------------------------------------------------------------
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -44,44 +51,94 @@ const char* MQTT_Password = "NoSinking";
 Ticker MQTT_KeepAlive_Ticker;
 unsigned long MQTT_KeepAlive_Delay = 60000;
 
-const byte MQTT_Subscribe_Topic_Number_Of = 5;
-String MQTT_Subscribe_Topic[MQTT_Subscribe_Topic_Number_Of] = {
-      "/Boat/Settings/" + WiFi_Hostname + "/#",
-      "/Boat/System/" + WiFi_Hostname,
-      "/Boat/All",
-      "/Boat/Relay/" + WiFi_Hostname + "/#",
-      "/Boat/Commands/" + WiFi_Hostname + "/#"
-    };
-
-#define Topic_Settings 0
-#define Topic_System 1
-#define Topic_All 2
-#define Topic_Relay 3
-#define Topic_Commands 4
+const byte MQTT_Subscribe_Topic_Number_Of = 3;
+String MQTT_Subscribe_Topic[MQTT_Subscribe_Topic_Number_Of] = {"/Boat/Settings/" + WiFi_Hostname + "/#", "/Boat/All", "/Boat/Relay/" + WiFi_Hostname};
 
 #define MQTT_Reconnect_Delay 2 // in secounds
 
 #define MQTT_Boot_Wait_For_Connection 15000
 
 
-// ------------------------------------------------------------ Relay ------------------------------------------------------------
-#include <W_Relay.h>
-W_Relay Relay(LOW);
+// ############################################################ Relay() ############################################################
+void Relay(String Topic, String Payload) {
+
+  // if (Topic == String(MQTT_Subscribe_Topic[1]) && Payload.indexOf("Relay-OFF") != -1) { // "/Boat/All"
+  //   Serial.println("Relay - All OFF");
+  //   for (int i = 0; i < Relay_Number_Of; i++) {
+  //     if (digitalRead(Relay_Pin[i]) != !Relay_On_State) {
+  //       digitalWrite(Relay_Pin[i], !Relay_On_State);
+  //       Serial.println("Relay " + String(i + 1) + " changed state to: OFF");
+  //     }
+  //   }
+  // }
+  //
+  // else if (String(MQTT_Subscribe_Topic[2]) == Topic) { // "/Boat/Relay"
+  //   byte Selected_Relay = Payload.substring(0, Payload.indexOf("-")).toInt();
+  //
+  //   String State = Payload.substring(Payload.indexOf("-") + 1, Payload.length());
+  //
+  //   bool State_Digital;
+  //   if (State == "ON") State_Digital = Relay_On_State;
+  //   else if (State == "OFF") State_Digital = !Relay_On_State;
+  //   else if (State == "FLIP") State_Digital = !digitalRead(Relay_Pin[Selected_Relay - 1]);
+  //
+  //   if (Selected_Relay <= Relay_Number_Of && digitalRead(Relay_Pin[Selected_Relay - 1]) != State_Digital) {
+  //     digitalWrite(Relay_Pin[Selected_Relay - 1], State_Digital);
+  //     Serial.print("Relay " + String(Selected_Relay) + " changed state to: ");
+  //     if (State_Digital == Relay_On_State) Serial.println("ON");
+  //     else Serial.println("OFF");
+  //   }
+  // }
 
 
-// ------------------------------------------------------------ ESP_Reboot() ------------------------------------------------------------
-Ticker ESP_Reboot_Ticker;
+    byte Selected_Relay = Payload.substring(0, Payload.indexOf("-")).toInt();
 
+    if (Payload.indexOf("Relay-OFF") != -1) { // "/Boat/All"
+      Serial.println("Relay - All OFF");
+      for (int i = 0; i < Relay_Number_Of; i++) {
+        if (digitalRead(Relay_Pin[i]) != !Relay_On_State) {
+          digitalWrite(Relay_Pin[i], !Relay_On_State);
+          Serial.println("Relay " + String(i + 1) + " changed state to: OFF");
+          MQTT_Client.publish(MQTT_Subscribe_Topic[2].c_str(), 0, false, String("S-" + String(i + 1) + "-OFF").c_str());
+        }
+      }
+    }
 
+    // Ignore all requests thats larger then Relay_Number_Of
+    else if (Selected_Relay > Relay_Number_Of);
 
-// ############################################################ Relay_MQTT_Send() ############################################################
-void Relay_MQTT_Send() {
+    // State request
+    else if (Payload.indexOf("-?") != -1) {
+      String State_String = "S-" + String(Selected_Relay) + "-";
+      if (digitalRead(Selected_Relay) == Relay_On_State) State_String += "ON";
+      else State_String += "OFF";
+      MQTT_Client.publish(MQTT_Subscribe_Topic[2].c_str(), 0, false, State_String.c_str());
+    }
 
-  if (Relay.MQTT_Send_Topic() != ";") {
-    MQTT_Client.publish(Relay.MQTT_Send_Topic(true).c_str(), 0, false, Relay.MQTT_Send_Payload(true).c_str());
-  }
+    else if (Payload.indexOf("S-") == -1) {
 
-} // Relay_MQTT_Send()
+      String State = Payload.substring(Payload.indexOf("-") + 1, Payload.length());
+
+      bool State_Digital;
+      if (State == "ON") State_Digital = Relay_On_State;
+      else if (State == "OFF") State_Digital = !Relay_On_State;
+      else if (State == "FLIP") State_Digital = !digitalRead(Relay_Pin[Selected_Relay - 1]);
+
+      if (Selected_Relay <= Relay_Number_Of && digitalRead(Relay_Pin[Selected_Relay - 1]) != State_Digital) {
+        digitalWrite(Relay_Pin[Selected_Relay - 1], State_Digital);
+        Serial.print("Relay " + String(Selected_Relay) + " changed state to: ");
+        if (State_Digital == Relay_On_State) {
+          MQTT_Client.publish(MQTT_Subscribe_Topic[2].c_str(), 0, false, String("S-" + String(Selected_Relay) + "-ON").c_str());
+          Serial.println("ON");
+        }
+        else {
+          Serial.println("OFF");
+          MQTT_Client.publish(MQTT_Subscribe_Topic[2].c_str(), 0, false, String("S-" + String(Selected_Relay) + "-OFF").c_str());
+        }
+      }
+    }
+  } // Relay()
+
 
 
 // ############################################################ UpTime_String() ############################################################
@@ -181,28 +238,6 @@ void MQTT_KeepAlive() {
 } // MQTT_KeepAlive()
 
 
-// ############################################################ ESP_Reboot() ############################################################
-void ESP_Reboot() {
-
-  Serial.println("Rebooting");
-  Serial.flush();
-
-  ESP.restart();
-
-} // ESP_Reboot()
-
-
-// ############################################################ KillKillKill() ############################################################
-void KillKillKill() {
-
-  MQTT_Client.publish(String("/Boat/System/" + WiFi_Hostname).c_str(), 0, false, "Kill command issued, rebooting in 10");
-  Serial.println("Kill command issued, rebooting in 10");
-
-  ESP_Reboot_Ticker.once_ms(10000, ESP_Reboot);
-
-} // KillKillKill()
-
-
 // ############################################################ MQTT_Settings() ############################################################
 void MQTT_Settings(String Topic, String Payload) {
 
@@ -226,29 +261,15 @@ void MQTT_Settings(String Topic, String Payload) {
 } // MQTT_KeepAlive_Delay
 
 
-// ############################################################ MQTT_Settings() ############################################################
-void MQTT_Commands(String Topic, String Payload) {
-
-
-  if (Topic.indexOf(MQTT_Subscribe_Topic[Topic_Commands].substring(0, MQTT_Subscribe_Topic[Topic_Commands].indexOf("#"))) == -1) return;
-
-  if (Payload == "KillKillKill") KillKillKill();
-
-} // MQTT_Settings()
-
-
 // ############################################################ onMqttMessage() ############################################################
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
 
   if (ArduinoOTA_Active == true) return;
 
   MQTT_Settings(topic, payload);
+  Relay(topic, payload);
 
-  Relay.Check(topic, payload);
-
-  MQTT_Commands(topic, payload);
-
-} // onMqttMessage()
+} // Settings
 
 
 // ############################################################ IPtoString() ############################################################
@@ -288,7 +309,7 @@ void ArduinoOTA_Setup() {
     Serial.println("End");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    Serial.printf("Progress: %u%%\n", (progress / (total / 100)));
   });
   ArduinoOTA.onError([](ota_error_t error) {
     ArduinoOTA_Active = false;
@@ -313,24 +334,17 @@ void ArduinoOTA_Setup() {
 // ############################################################ setup() ############################################################
 void setup() {
 
-  // ------------------------------ Random Seed ------------------------------
-  randomSeed(analogRead(0));
-
-
   // ------------------------------ Serial ------------------------------
   Serial.setTimeout(50);
   Serial.begin(115200);
-  Serial.println("");
 
+  // ------------------------------ Pins ------------------------------
+  Serial.println("Mega: Configuring pins");
 
-  // ------------------------------ W_Relay ------------------------------
-  Serial.println("Configuring W Relay");
-
-  Relay.Set_Pins(D1, D2, D5, D6, D7);
-  Relay.Set_Auto_OFF_Relays(false, false, false, false, false);
-
-
-  Relay.Set_Topics("/Boat/All", "/Boat/Relay/" + WiFi_Hostname);
+  for (byte i = 0; i < Relay_Number_Of; i++) {
+    pinMode(Relay_Pin[i], OUTPUT);
+    digitalWrite(Relay_Pin[i], !Relay_On_State);
+  }
 
 
   // ------------------------------ MQTT ------------------------------
@@ -394,9 +408,5 @@ void loop() {
     ArduinoOTA.handle();
   }
   ArduinoOTA.handle();
-
-  Relay.Auto_OFF();
-
-  Relay_MQTT_Send();
 
 } // loop()
